@@ -72,10 +72,9 @@ async def authenticate_user(
     user = result.scalar_one_or_none()
     if user is None:
         return False
-    user_dto = UserSchema.model_validate(user)
-    if not bcrypt_context.verify(password, user_dto.hashed_password):
+    if not bcrypt_context.verify(password, user.hashed_password):
         return False
-    return user_dto
+    return user
 
 
 

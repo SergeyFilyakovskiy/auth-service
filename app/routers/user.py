@@ -32,12 +32,20 @@ router = APIRouter(
     tags=['user']
 )
 
+# ========================================
+# 1. Получение данных своего профиля
+# ========================================
 @router.get("/me", response_model=UserResponse)
 async def read_user_profile(
     db: AsyncSession = Depends(get_db),
     token_data: TokenData = Depends(get_current_user)
 ):
-
+    """
+    Возвращает из БД все данные о пользователе
+    
+    :param db: Открытая сессия БД
+    :param token_data: Данные из токена 
+    """
     result = await db.execute(select(User).where(User.id == token_data.id))
     user = result.scalar_one_or_none()
     
@@ -55,7 +63,17 @@ async def update_user_profile(
     update_data: UpdateProfileRequest,
     db: AsyncSession = Depends(get_db),
     token_data: TokenData = Depends(get_current_user)
-):
+) -> User:
+    """
+    Ручка для изменения данных профиля пользователя
+    
+    :param update_data: Данные для обновления
+    :type update_data: UpdateProfileRequest
+    :param db: Открытая сессия БД
+    :param token_data: Данные из JWT
+    :return: Возращает обновленный профиль
+    :rtype: User
+    """
 
     result = await db.execute(select(User).where(User.id == token_data.id))
     user_in_db = result.scalar_one_or_none()
@@ -93,6 +111,13 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
     token_data: TokenData = Depends(get_current_user)
 ):
+    """
+    Ручка для смены пароля пользователя
+
+    :param password_data: объект класса содержащий в
+    себе старый и новый пароль
+    :type password_data: ChangePasswordRequest
+    """
  
     result = await db.execute(select(User).where(User.id == token_data.id))
     user_in_db = result.scalar_one_or_none()
@@ -115,7 +140,7 @@ async def change_password(
 
 
 # ==========================================
-# 5. Удалить аккаунт
+# 4. Удалить аккаунт(Полное удаление)
 # ==========================================
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
@@ -123,16 +148,27 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
     token_data: TokenData = Depends(get_current_user)
 ):
+    """
+
+    Полное удаление пользователя из БД
+    Ручка доступна как админам, так и обычным пользователям,
+    обычный пользователь может удалить только свой профиль
+    админ может удалить любой профиль пользователя, но не админа
+
+    :param user_id: id пользователя 
+    :type user_id: int
+
+    """
 
     if token_data.id != user_id and token_data.role != "admin":
-         raise HTTPException(status_code=403,
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                               detail="Not authorized to delete this user")
 
     result = await db.execute(select(User).where(User.id == user_id))
     user_to_delete = result.scalar_one_or_none()
 
     if not user_to_delete:
-        raise HTTPException(status_code=404, 
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
                             detail="User not found")
 
     await db.delete(user_to_delete)
