@@ -1,6 +1,8 @@
 from fastapi import Depends, HTTPException, APIRouter
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Sequence
 from app.database import get_db
 from app.schemas import ChangePasswordRequest, TokenData, UpdateProfileRequest, UserResponse
 from starlette import status
@@ -10,10 +12,12 @@ from  ..models import User, UserRole
 class RoleChecker:
 
     """
+
     Класс для проверки роли пользователя
+    
     """
 
-    def __init__(self, allowed_roles: list[UserRole]):
+    def __init__(self, allowed_roles: Sequence[str]):
         self.allowed_roles = allowed_roles
 
     def __call__(self, current_user: TokenData = Depends(get_current_user)):
@@ -26,6 +30,9 @@ class RoleChecker:
             )
         
         return current_user
+
+#Зависимость для ручек, корорые будут доступны только админам
+admin_only = RoleChecker(["admin", "super_admin"])
 
 router = APIRouter(
     prefix='/user',
@@ -64,6 +71,7 @@ async def update_user_profile(
     db: AsyncSession = Depends(get_db),
     token_data: TokenData = Depends(get_current_user)
 ) -> User:
+    
     """
     Ручка для изменения данных профиля пользователя
     
@@ -111,12 +119,15 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
     token_data: TokenData = Depends(get_current_user)
 ):
+    
     """
+
     Ручка для смены пароля пользователя
 
     :param password_data: объект класса содержащий в
     себе старый и новый пароль
     :type password_data: ChangePasswordRequest
+
     """
  
     result = await db.execute(select(User).where(User.id == token_data.id))
@@ -139,37 +150,85 @@ async def change_password(
     return {"message": "Password updated successfully"}
 
 
-# ==========================================
-# 4. Удалить аккаунт(Полное удаление)
-# ==========================================
+@router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_profile(
+    db: AsyncSession = Depends(get_db),
+    token: TokenData = Depends(get_current_user)
+) -> None:
+    """
+    
+    Удаление профиля пользователя
+    (мягкое), полное удаление может сделать только 
+    админ
+
+    :param db: Открытая сессия БД
+    :param token: Данные из JWT
+
+    """
+    result = await db.execute(select(User).where(User.id == token.id))
+    user_in_db = result.scalar_one_or_none()
+    if not user_in_db:
+        raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail= 'User not found'
+        )
+    
+    if user_in_db.is_active == False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='User is already deleted'
+        )
+    
+    user_in_db.is_active = False
+
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(
+async def soft_delete_user(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    token_data: TokenData = Depends(get_current_user)
-):
+    current_user: TokenData = Depends(admin_only),
+   
+) -> None:
     """
+    
+    Мягкое удаление профиля любого 
+    (кроме админов) пользователя, 
+    которое доступно только админам
 
-    Полное удаление пользователя из БД
-    Ручка доступна как админам, так и обычным пользователям,
-    обычный пользователь может удалить только свой профиль
-    админ может удалить любой профиль пользователя, но не админа
 
-    :param user_id: id пользователя 
-    :type user_id: int
+    :param db: Открытая сессия БД
+    :param token: Данные из JWT
 
     """
+    result = await db.execute(select(User).where(User.id == token.id))
+    user_in_db = result.scalar_one_or_none()
+    if not user_in_db:
+        raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail= 'User not found'
+        )
+    
+    if user_in_db.is_active == False:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='User is already deleted'
+        )
+    
+    if user_in_db.role == "admin" or user_in_db.role == "super_admin":
+        raise HTTPException(
+            status_code= status.HTTP_403_FORBIDDEN,
+            detail= 'You cannot delete admin'
+        )
 
-    if token_data.id != user_id and token_data.role != "admin":
-         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                              detail="Not authorized to delete this user")
+    user_in_db.is_active = False
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user_to_delete = result.scalar_one_or_none()
-
-    if not user_to_delete:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
-                            detail="User not found")
-
-    await db.delete(user_to_delete)
+    db.add(user_in_db)
     await db.commit()
+    await db.refresh(user_in_db)
+
+@router.post("/logout")
+async def logout():
+
+    response = JSONResponse({'detail': 'logged out'})
+    response.delete_cookie("AccessToken")
+    response.delete_cookie("RefreshToken")
+    return response

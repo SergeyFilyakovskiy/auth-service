@@ -4,7 +4,8 @@ Docstring for app.routers.auth
 Authenfication router 
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Cookie
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +16,7 @@ from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from datetime import timedelta, timezone, datetime
 from typing import Annotated
+import uuid
 from ..config import SECRET_KEY, ALGORITHM
 from ..database import db_dependency, get_db
 from ..schemas import UserSchema, TokenData
@@ -74,6 +76,8 @@ async def authenticate_user(
         return False
     if not bcrypt_context.verify(password, user.hashed_password):
         return False
+    if not user.is_active:
+        return False
     return user
 
 
@@ -86,7 +90,8 @@ def crate_access_token (
 )-> str:
 
     """
-    Создает JWT токен
+    Создает JWT токен и дает ему уникальный 
+    идетификатор
     
     :param email: Email пользователя
     :param user_id: ID пользователя в БД
@@ -95,8 +100,27 @@ def crate_access_token (
     """
 
     expires = datetime.now(timezone.utc) + expires_delta
-    encode = {'sub': email, 'id': user_id, 'role': role, 'exp': expires}
+
+    encode = { 
+              'sub': email, 
+              'id': user_id, 
+              'role': role, 
+              'type' : "access",
+              'exp': expires,
+              }
+    
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def create_refresh_token(user_id: int) -> str:
+    
+    expires = datetime.now(timezone.utc) + timedelta(days=7)
+    payload = {
+        "sub" : str(user_id),
+        "type": "refresh",
+        "exp" : expires,
+    }
+    
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 
@@ -130,15 +154,26 @@ async def create_user (
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User with this email already exists")
-
-
-async def get_current_user(token: Annotated[str, Depends(oauth2_brearer)])-> TokenData:
-    """
-    Достает из  JWT данные
     
-    :type token: Annotated[str, Depends(oauth2_brearer)]
-    :rtype: TokenData
+
+async def get_current_user(
+        token: None | str = Cookie(default= None,alias="AccessToken")
+)-> TokenData:
+    
     """
+    
+    Достает из cookie JWT и дешифрует его
+
+    :type token: None | str
+    :rtype: TokenData
+
+    """
+
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail= "Not authenficated",
+            )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_email = payload.get('sub')
@@ -169,13 +204,80 @@ async def login_for_access_token(
     )
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
+            status_code=status.HTTP_404_NOT_FOUND, 
             detail="Could not validate user."
         )
-    token = crate_access_token(
+    access_token = crate_access_token(
         user.email,
         user.id,
         user.role,
-        timedelta(hours=1)
+        timedelta(minutes=10)
     )
-    return{'access_token':token, 'token_type': 'bearer'}
+
+    refresh_token = create_refresh_token(user.id)
+
+    response = JSONResponse({"detail": "logged in"})
+    response.set_cookie(
+        key="AccessToken",
+        value=access_token,
+        httponly=True,
+        path="/",
+    )
+    response.set_cookie(
+        key="RefreshToken",
+        value= refresh_token,
+        httponly= True,
+        path="/auth"
+    )
+    return response
+    
+@router.post("/refresh")
+async def refresh_access_token(
+    refresh_token: str | None = Cookie(default= None, alias="RefreshToken"),
+    db: AsyncSession = Depends(get_db)
+):
+    if refresh_token is None:
+        raise HTTPException(
+            status_code= status.HTTP_401_UNAUTHORIZED,
+            detail='No refresh token'
+        )
+    
+    try:
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get('type') != "refresh":
+            raise HTTPException(
+                status_code= status.HTTP_401_UNAUTHORIZED, 
+                detail="Invalid token type"
+            )
+        
+        user_id = int(payload.get("sub"))
+
+    except JWTError:
+        raise HTTPException(
+            status_code= status.HTTP_401_UNAUTHORIZED,
+            detail= 'Invalid refresh token'
+        )
+    
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail= "User not found"
+        )
+    
+    new_access_token = crate_access_token(
+        user.email, 
+        user.id, 
+        user.role, 
+        timedelta(minutes=10)
+        )
+    response = JSONResponse({"detail": "token was refresh"})
+    response.set_cookie(
+        key="AccessToken",
+        value=new_access_token,
+        httponly=True,
+        path="/",
+    )
+    return response
