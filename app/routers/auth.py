@@ -37,7 +37,7 @@ oauth2_brearer = OAuth2PasswordBearer(
     tokenUrl= 'auth/token'
 )
 
-class CreteUserRequest(BaseModel):
+class CreateUserRequest(BaseModel):
     """
     Docstring for CreteUserRequest
     """
@@ -82,7 +82,7 @@ async def authenticate_user(
 
 
 
-def crate_access_token (
+def create_access_token (
         email: str,
         user_id: int, 
         role: str,
@@ -127,7 +127,7 @@ def create_refresh_token(user_id: int) -> str:
 @router.post("/", status_code=status.HTTP_201_CREATED) 
 async def create_user (
     db: db_dependency,
-    create_user_request: CreteUserRequest
+    create_user_request: CreateUserRequest
 ) -> None:
     """
     Создает нового пользователя в БД
@@ -207,7 +207,7 @@ async def login_for_access_token(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="Could not validate user."
         )
-    access_token = crate_access_token(
+    access_token = create_access_token(
         user.email,
         user.id,
         user.role,

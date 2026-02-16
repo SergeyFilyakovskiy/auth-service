@@ -35,6 +35,7 @@ async def get_all_users(
 
 @router.get('/{user_id}', status_code=status.HTTP_200_OK)
 async def get_user(
+    user_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: TokenData = Depends(admin_only)
 ):
@@ -46,6 +47,17 @@ async def get_user(
     :param current_user: Проверка роли админ/супер-админ
 
     """
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail=' User not found'
+        )
+    
+    return user
+    
 
 # ==========================================
 # Удалить аккаунт(Полное удаление)
@@ -70,16 +82,15 @@ async def delete_user(
     result = await db.execute(select(User).where(User.id == user_id))
     user_to_delete = result.scalar_one_or_none()
 
+    if not user_to_delete:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
+                            detail="User not found")
+
     if user_to_delete.role == 'admin' or user_to_delete.role == 'super_admin':
         raise HTTPException(
             status_code= status.HTTP_403_FORBIDDEN,
             detail= 'You cannot delete user with role admin'
         )
 
-    if not user_to_delete:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
-                            detail="User not found")
-
     await db.delete(user_to_delete)
     await db.commit()
-

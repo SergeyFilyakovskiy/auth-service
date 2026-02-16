@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .user import RoleChecker
 from app.database import get_db
 from app.models import User
-from app.schemas import TokenData
+from app.schemas import TokenData, UpdateProfileRequest
 
 router = APIRouter(
     prefix='/super-admin',
@@ -14,6 +14,39 @@ router = APIRouter(
 )
 
 super_admin_only = RoleChecker(["super_admin"])
+
+@router.post(
+        "/{user_id}", 
+        status_code= status.HTTP_200_OK,
+        response_model= UpdateProfileRequest
+        )
+async def change_user_profile(
+    user_id: int,
+    update_info: UpdateProfileRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenData = Depends(super_admin_only),
+):
+    """
+
+    Endpoint  для изменения данных 
+    профиля пользователя
+    
+    :param user_id:  ID пользователя
+    :type user_id: int
+    :param current_user: Проверка роли супер-админа 
+
+    """
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail= "User not found"
+        )
+    
+    
 
 # ==========================================
 # Удалить аккаунт(Полное удаление)
@@ -85,3 +118,4 @@ async def soft_delete_user(
     db.add(user_in_db)
     await db.commit()
     await db.refresh(user_in_db)
+
